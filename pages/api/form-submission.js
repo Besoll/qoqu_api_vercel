@@ -1,43 +1,72 @@
-import express from 'express';
-import fetch from 'node-fetch';
-import Cors from 'micro-cors';
+const fetch = require('node-fetch');
 
-const cors = Cors({
-  allowedMethods: ['POST', 'OPTIONS'],
-});
+module.exports = async (req, res) => {
+  if (req.method === 'POST') {
+    const { name, email, phonenumber, message } = req.body;
 
-const handler = async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    res.end();
-    return;
-  }
+    if (!name || !email || !phonenumber || !message) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
 
-  const leadData = req.body;
-  const url = 'https://www.zohoapis.eu/crm/v2/Leads';
+    if (!validateEmail(email)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
 
-  try {
-    const response = await fetch(url, {
+    const accessToken = await getAccessToken();
+
+    const leadData = {
+      data: [{
+        Last_Name: name,
+        Email: email,
+        Phone: phonenumber,
+        Description: message
+      }]
+    };
+
+    const response = await fetch('https://www.zohoapis.eu/crm/v2/Leads', {
       method: 'POST',
-      body: JSON.stringify({ data: [leadData] }),
       headers: {
-        Authorization: `Bearer ${process.env.ZOHO_TOKEN}`,
         'Content-Type': 'application/json',
+        'Authorization': `Zoho-oauthtoken ${accessToken}`
       },
+      body: JSON.stringify(leadData)
     });
 
     const zohoResponse = await response.json();
 
-    if (!zohoResponse.data || !zohoResponse.data[0].details || !zohoResponse.data[0].details.id) {
-      console.error('Failed to create lead in Zoho CRM: ', zohoResponse);
-      return res.status(500).json({ success: false });
+    if (!response.ok) {
+      return res.status(500).json({ error: `Failed to create lead in Zoho CRM: ${zohoResponse.error}` });
     }
 
-    console.log('Created lead in Zoho CRM: ', zohoResponse.data[0].details.id);
     res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error while creating lead in Zoho CRM: ', error);
-    res.status(500).json({ success: false });
+  } else {
+    // Handle any other HTTP method
+    res.setHeader('Allow', ['POST']);
+    res.status(405).end(`Method ${req.method} Not Allowed`);
   }
 };
 
-export default cors(handler);
+async function getAccessToken() {
+  const response = await fetch('https://accounts.zoho.eu/oauth/v2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      'refresh_token': process.env.REFRESH_TOKEN,
+      'client_id': process.env.CLIENT_ID,
+      'client_secret': process.env.CLIENT_SECRET,
+      'grant_type': 'refresh_token'
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(`Failed to refresh access token: ${data.error}`);
+  }
+
+  return data.access_token;
+}
+
+function validateEmail(email) {
+  var re = /\S+@\S+\.\S+/;
+  return re.test(email);
+}
